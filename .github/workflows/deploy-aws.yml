@@ -1,0 +1,89 @@
+name: Bonus - déploiement AWS par OIDC
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Vérifications pré-déploiement
+    if: vars.AWS_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint && npm run test:ci
+
+  deps-audit:
+    name: Audit pré-déploiement
+    if: vars.AWS_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+
+  deploy:
+    name: Déployer sur ECS Fargate par OIDC
+    if: vars.AWS_ENABLED == 'true'
+    needs: [test, deps-audit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assumer un rôle AWS sans clé statique
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Se connecter à ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Construire et publier l'image taguée par SHA
+        id: image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_SHA"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+      - name: Enregistrer une nouvelle task definition et mettre à jour ECS
+        env:
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+          ECS_TASK_FAMILY: ${{ vars.ECS_TASK_FAMILY }}
+          ECS_CONTAINER_NAME: ${{ vars.ECS_CONTAINER_NAME }}
+          IMAGE_URI: ${{ steps.image.outputs.image }}
+        run: |
+          set -euo pipefail
+          aws ecs describe-task-definition --task-definition "$ECS_TASK_FAMILY" --query taskDefinition > task-definition-current.json
+          jq --arg IMAGE "$IMAGE_URI" --arg NAME "$ECS_CONTAINER_NAME" \
+            '{family, taskRoleArn, executionRoleArn, networkMode, containerDefinitions, volumes, placementConstraints, requiresCompatibilities, cpu, memory, runtimePlatform} | with_entries(select(.value != null)) | .containerDefinitions |= map(if .name == $NAME then .image = $IMAGE else . end)' \
+            task-definition-current.json > task-definition-new.json
+          NEW_TASK_ARN=$(aws ecs register-task-definition --cli-input-json file://task-definition-new.json --query 'taskDefinition.taskDefinitionArn' --output text)
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition "$NEW_TASK_ARN" --force-new-deployment

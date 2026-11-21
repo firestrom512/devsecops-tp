@@ -1,0 +1,14 @@
+.git
+.github
+node_modules
+.env
+.env.*
+coverage
+.nyc_output
+*.log
+tests
+docs
+aws
+scripts
+README.md
+*.zip
