@@ -61,6 +61,32 @@ jobs:
           languages: javascript-typescript
       - uses: github/codeql-action/analyze@v4
 
+  baseline-audit:
+    name: baseline-audit (démonstration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Auditer les versions initiales sans exécuter leur code
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/baseline"
+          cat > "$RUNNER_TEMP/baseline/package.json" <<'JSON'
+          {
+            "name": "baseline-vulnerable-tp",
+            "version": "1.0.0",
+            "dependencies": { "express": "4.17.1", "lodash": "4.17.15" },
+            "devDependencies": { "jest": "^29.7.0", "supertest": "^7.0.0" }
+          }
+          JSON
+          cd "$RUNNER_TEMP/baseline"
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          npm audit --json > audit-baseline.json || true
+          node -e 'const x=require("./audit-baseline.json"); console.log("BASELINE npm audit:", JSON.stringify(x.metadata.vulnerabilities))'
+
   image:
     name: image
     needs: [test, deps-audit]
@@ -79,6 +105,20 @@ jobs:
           tags: devsecops-tp:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Mesurer les images naïve et optimisée
+        shell: bash
+        run: |
+          docker build -f Dockerfile.naif.example -t devsecops-tp:naif .
+          docker image inspect devsecops-tp:naif --format 'NAIVE size_bytes={{.Size}} layers={{len .RootFS.Layers}}'
+          docker image inspect devsecops-tp:${{ github.sha }} --format 'OPTIM size_bytes={{.Size}} layers={{len .RootFS.Layers}}'
+      - name: Scan de l'image naïve (diagnostic pédagogique, non bloquant)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: devsecops-tp:naif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'
+          format: table
       # Commit exact vérifié pour le tag officiel annoté v0.36.0.
       - name: Trivy - bloquer les CVE corrigeables HIGH et CRITICAL
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
