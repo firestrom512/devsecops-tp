@@ -2,14 +2,14 @@
 
 [![CI DevSecOps](https://github.com/firestrom512/devsecops-tp/actions/workflows/ci.yml/badge.svg)](https://github.com/firestrom512/devsecops-tp/actions/workflows/ci.yml)
 
-> Projet de correction du TP de clôture CI/CD. **Les résultats de CI, npm audit, CodeQL, Docker et Trivy ne sont pas certifiés tant que le dépôt n'a pas été publié et que les workflows n'ont pas été exécutés.** Cette archive contient le code final sécurisé, pas une application initiale volontairement vulnérable mise en ligne.
+> Projet corrigé et publié sur GitHub. Vérifié le **21 novembre 2026** : 16 tests Jest réussis, **100 % de couverture des lignes**, audit des dépendances sans alerte HIGH/CRITICAL, CodeQL et scanner Trivy de l’image de production réussis. [Voir la CI verte](https://github.com/firestrom512/devsecops-tp/actions/runs/44923348699).
 
 ## Exécution
 
 Pré-requis : Node.js 22, npm, Git. Docker facultatif pour le développement et nécessaire pour la partie image.
 
 ```bash
-npm install                  # Génère package-lock.json, à COMMITER
+npm ci                       # Utilise le package-lock.json déjà commité
 npm run lint
 npm test                     # Jest + Supertest et couverture >= 80 %
 npm audit --audit-level=high
@@ -18,7 +18,7 @@ npm start
 
 Puis tester `http://localhost:3000/health`, `/hello?name=Lina`, `/prefs?theme=dark&lang=en`.
 
-**Important :** le `package-lock.json` doit être généré via `npm install` et ajouté au premier commit **avant** un push sur GitHub : le pipeline et le Dockerfile emploient `npm ci`. L'archive a été préparée dans un environnement sans accès au registre npm, donc aucun lockfile artificiel ou résultat d'audit inventé n'a été fourni. Sous Windows, le script `scripts/publier.ps1` peut automatiser installation, tests, audit et push vers un dépôt `devsecops-tp` déjà créé. Exécuter ce script uniquement après avoir regardé sa destination.
+**Important :** `package-lock.json` a été généré sur GitHub Actions et commité dans `main`. Le pipeline et le Dockerfile utilisent `npm ci`. Le script Windows `scripts/publier.ps1` est conservé comme aide pédagogique ; il n'est plus nécessaire pour publier ce dépôt.
 
 ### Routes
 
@@ -48,10 +48,10 @@ Le workflow `deps-audit` exécute `npm audit --audit-level=high` et bloque sur l
 
 | Audit npm | Critical | High | Moderate | Low |
 |---|---:|---:|---:|---:|
-| Avant — dépendances du starter | À mesurer | À mesurer | À mesurer | À mesurer |
-| Après — dépendances corrigées | À mesurer | À mesurer | À mesurer | À mesurer |
+| Avant — dépendances du starter | **0** | **5** | **0** | **3** |
+| Après — dépendances corrigées | **0** | **0** | **18** | **0** |
 
-Les valeurs sont volontairement laissées **non mesurées** : une estimation n'est pas un audit réel. Voir `docs/MESURES.md` pour les commandes.
+Les chiffres **avant** proviennent du job `baseline-audit` : il résout les dépendances du starter et exécute `npm audit` **sans installer ni lancer l'application vulnérable**. Les chiffres **après** viennent du job `deps-audit`. Les **18 vulnérabilités modérées restent présentes** dans les dépendances de développement et ne sont pas bloquantes au seuil exigé (`--audit-level=high`). [Preuves dans GitHub Actions](https://github.com/firestrom512/devsecops-tp/actions/runs/44923348699).
 
 ### 3. Correction des trois failles et tests de régression
 
@@ -63,7 +63,7 @@ Les valeurs sont volontairement laissées **non mesurées** : une estimation n'e
 
 `tests/security.test.js` vérifie chacune de ces corrections et des cas limites (hôtes privés interdits, réponses propres, en-têtes d'identification). Le code final ne reproduit aucune de ces failles.
 
-CodeQL est configuré dans le job `CodeQL` du pipeline. L'étape de l'énoncé **« trouver la règle, le fichier, la ligne et la gravité »** exige une analyse GitHub réelle : aucun résultat n'est fabriqué ici.
+CodeQL est exécuté dans le job `CodeQL` du pipeline, **réussi sur la dernière exécution vérifiée**. Pour identifier des alertes éventuelles (règle, fichier, ligne, gravité), consulter **Security → Code scanning** dans GitHub. Un job vert n'est pas une preuve absolue qu'aucune alerte n'est ouverte.
 
 ### 4. Pipeline durci
 
@@ -81,7 +81,7 @@ La protection de branche **nécessite un réglage manuel GitHub** : PR obligatoi
 
 ### 5. Image Docker optimisée et scan
 
-Le `Dockerfile` fourni est **multi-stage**, avec une version explicite de Node/Alpine (`node:22.23.5-alpine3.24`), `npm ci --omit=dev`, `COPY package*.json` avant les sources, un `.dockerignore`, `USER node` et `CMD ["node", "src/index.js"]`. Pour une immutabilité totale, épingler aussi un **digest** de base après vérification sur Docker Hub. Le fichier `Dockerfile.naif.example` permet la comparaison demandée par l'enseignant ; **ne pas exposer cette image naïve sur Internet**.
+Le `Dockerfile` fourni est **multi-stage**, avec une version explicite de Node/Alpine (`node:22.23.5-alpine3.24`), `npm ci --omit=dev`, `COPY package*.json` avant les sources, un `.dockerignore`, `USER node`, la suppression de **npm/Corepack de l'image finale** et `CMD ["node", "src/index.js"]`. Pour une immutabilité totale, épingler aussi un **digest** de base après vérification sur Docker Hub. Le fichier `Dockerfile.naif.example` permet la comparaison demandée par l'enseignant ; **ne pas exposer cette image naïve sur Internet**.
 
 ```bash
 docker build -f Dockerfile.naif.example -t devsecops-tp:naif .
@@ -95,10 +95,10 @@ docker run --rm -p 127.0.0.1:3000:3000 devsecops-tp:optim
 
 | Image | Taille | Couches | CVE HIGH | CVE CRITICAL |
 |---|---:|---:|---:|---:|
-| Naïve | Non mesurée | Non mesuré | Non mesuré | Non mesuré |
-| Optimisée | Non mesurée | Non mesuré | Non mesuré | Non mesuré |
+| Naïve | **432,4 Mo** | **11** | **197** | **1** |
+| Optimisée | **62,1 Mo** | **9** | **0** | **0** |
 
-Pour une image naïve sans `.dockerignore`, le `COPY . .` risque d'intégrer `.env` et `.git` au contexte / à une couche de construction, ainsi que les modules et tests. La couche la plus lourde **doit être déterminée** avec `docker history` ; il ne faut pas inventer son poids. En CI, Trivy fait échouer le job en présence d'une CVE HIGH ou CRITICAL **corrigeable**. Voir `docs/MESURES.md`.
+Mesures issues de la [CI du 21 novembre 2026](https://github.com/firestrom512/devsecops-tp/actions/runs/44923348699) : tailles via `docker image inspect` (Mo décimaux), couches via `RootFS.Layers` et CVE HIGH/CRITICAL **corrigeables** via Trivy (`ignore-unfixed: true`). L'image naïve est construite avec le **Dockerfile initial mais les dépendances et le code final corrigés** : elle sert à comparer les structures Docker, pas à mesurer le dépôt vulnérable complet de départ. Pour une image naïve sans `.dockerignore`, `COPY . .` pourrait embarquer `.env` et `.git` ; le `.dockerignore` du projet les exclut pour la comparaison actuelle. L'image optimisée est environ **86 % moins lourde**. Le job Trivy bloquant sur l'image finale a réussi. Pour identifier la couche la plus lourde précisément, consulter `docker history`.
 
 ### 6. AWS : architecture cible (étude sur papier, aucune ressource créée)
 
@@ -140,14 +140,14 @@ Variables requises **seulement en cas de déploiement réel** : `AWS_ROLE_ARN`, 
 
 | Critère demandé | État du projet |
 |---|---|
-| Code : 3 failles corrigées + tests | Écrit ; exécution Jest à vérifier après npm install |
+| Code : 3 failles corrigées + tests | **16 tests Jest validés, 100 % de couverture des lignes** |
 | Dependabot, `gitignore`, `.env.example` | Préparés |
-| CI npm audit, tests et CodeQL | Workflows préparés ; exécution réelle à vérifier |
-| Docker multi-stage + Trivy SHA | Préparé ; build/scan réel non effectué |
+| CI npm audit, tests et CodeQL | **Succès sur GitHub Actions** |
+| Docker multi-stage + Trivy SHA | **Build et scan validés ; mesures comparatives documentées** |
 | Calculs AWS + ECR lifecycle + Mermaid | Complétés à partir de l'énoncé |
 | Bonus déploiement OIDC | Workflow préparé et volontairement désactivé |
 | Secret protection / branch protection | Réglages GitHub à activer manuellement |
-| `package-lock.json` | **À générer et commiter** via `npm install` |
-| Audit avant/après et tailles images | **À mesurer** (ne jamais inventer les chiffres) |
+| `package-lock.json` | **Généré et commité** |
+| Audit avant/après et tailles images | **Mesurés sur GitHub Actions et reportés plus haut** |
 
 Voir [docs/MESURES.md](docs/MESURES.md) pour les manipulations et captures à produire et [docs/BASELINE.md](docs/BASELINE.md) pour la description de l'application initiale vulnérable.
