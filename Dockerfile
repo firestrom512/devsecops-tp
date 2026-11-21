@@ -11,6 +11,10 @@ WORKDIR /app
 COPY --from=dependencies --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node package.json ./
 COPY --chown=node:node src ./src
+# NPM et Corepack ne sont pas nécessaires dans le conteneur en production.
+# Les supprimer réduit la surface d'attaque et élimine leurs dépendances vulnérables.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+           /usr/local/lib/node_modules/corepack /usr/local/bin/corepack
 USER node
 EXPOSE 3000
 CMD ["node", "src/index.js"]
